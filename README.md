@@ -9,15 +9,9 @@ This project answers a question I was curious about last summer... "Is spring st
 
 ### The Data - Normalized Difference Vegetation Index 
 
-This project works with data gathered through **Google Earth Engine** (GEE) using JS script available here and a user-specified analysis region which can be created in GEE. Specifically it uses spectral imagery from the MODIS Terra satellite (8-Day Global 500m product) to calculate a time series of the Normalized Difference Vegetation Index (**NDVI**). NDVI values range from -1 to 1 and indicate the density of photosynthesizing vegetation on the surface through variations in the adsorption and reflectance of near infrared and red bands of solar energy throughout the year. This example is for the Upper Valley region of New Hampshire and Vermont.
+This project works with data gathered through **Google Earth Engine** (GEE) using JS script available here and a user-specified analysis region which can be created in GEE. Specifically it uses spectral imagery from the MODIS Terra satellite (8-Day Global 500m product) to calculate a time series of the Normalized Difference Vegetation Index (**NDVI**). NDVI values range from -1 to 1 and indicate the density of photosynthesizing vegetation on the surface through variations in the adsorption and reflectance of near infrared and red bands of solar energy throughout the year. The JS script in GEE produces a time series, the example below is for the Upper Valley region of New Hampshire and Vermont.
 
 ![](https://github.com/mckeonryan406/Green_Up_Date/blob/master/UV_ndvi_20yrTS.png)
-
-
-
-
-
-
 
 ### The Processing - How to define the start of spring?
 

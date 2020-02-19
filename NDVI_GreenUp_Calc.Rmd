@@ -1,0 +1,286 @@
+---
+title: "NDVI Green Up Date Calculator"
+author: "Ryan McKeon"
+date: "1/17/2020"
+output: html_document
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# IMPORT Libraries
+library(data.table)
+library(lubridate)
+library(changepoint)
+library(zoo)
+library(gridExtra)
+library(tidyverse)
+
+
+```
+## What this project does
+
+This code answers a question I was curious about last summer... "Is spring starting earlier than it used to?"  Given ample evidence for a warming climate, I figured I already knew the answer, but it was the challenge of actually acquiring, processing, and visualizing data to inform my hunch that I was most interested in.
+
+#### The Data -- Normalized Difference Vegetation Index 
+This project works with data gathered through **Google Earth Engine** (GEE) using JS script available here and a user-specified analysis region which can be created in GEE. Specifically it uses spectral imagery from the MODIS Terra satellite (8-Day Global 500m product) to calculate a time series of the Normalized Difference Vegetation Index (**NDVI**). NDVI values range from -1 to 1 and indicate the density of photosynthesizing vegetation on the surface through variations in the adsorption and reflectance of near infrared and red bands of solar energy throughout the year. This example is for the Upper Valley region of New Hampshire and Vermont.
+
+#### The Processing -- How to define the start of spring?
+We begin with a time series of NDVI starting in 2000 when the satellite became operational and extending to the first week of 2020.  This code walks through processing this time series to identify the timing of the start of the spring “green up” (when grass starts growing and leaves pop out of deciduous trees and bushes) for each year of data.  Along the way it discusses how to contend with noise and uncertainty in the data and the rationale for decisions about how the data was processed and interpreted.  
+
+ 
+## Getting Started
+Loading data and initial processing and visualization. 
+
+```{r, echo=FALSE}
+# load MODIS NDVI data
+ndviDF = fread("UV_poly_ndvi_2000_2020.csv") 
+
+# convert "Date" to date object AND put it in a new field called "rDate"
+ndviDF$rDate = parse_date_time(ndviDF$Satellite_data, "%d-%m-%y")
+
+# remove rows NAs from the data set
+ndviDF  = ndviDF[is.na(ndviDF$ndviMedian) == FALSE, ]
+
+# add year field by reading the date-time in "rDate" field
+ndviDF$year = year(ndviDF$rDate)
+
+# Plot the NDVI Time Series
+ggplot(data=ndviDF) +
+  geom_line(aes(x=ndviDF$rDate, y=ndviDF$ndviMedian)) +
+  xlab("Year") +
+  ylab("Median NDVI Observed") +
+  ggtitle("NDVI from MODIS Terra 8-day Global 500m Data Set")
+
+```
+
+**The NDVI time series for the Upper Valley Region**<br>
+From this plot one can easily see the annual cycle of vegetation on this New England landscape and some of the curiosities of working with NDVI data.  First, the summers all max out at a fairly stable maximum “greeness” value, but the winters are not nearly as consistent, which is likely due to varying amounts of snow on the ground.  The relative sameness of the summers vs. the winters is easy to see on the histogram of the same data below...
+
+```{r, echo=F}
+# Histogram of all NDVI values observed
+ggplot(data=ndviDF) +
+  geom_histogram(aes(ndviMedian), binwidth = 0.03) +
+  #geom_vline(xintercept = 0.3, color = "blue") +
+  #geom_vline(xintercept = 0.8, color = "red") +
+  xlab("Median NDVI Observed") +
+  ylab("Count") +
+  ggtitle("Distribution of All NDVI Values Observed")
+```
+
+**20 Year Histogram of NDVI for the Upper Valley Region**<br>
+
+Here the winter values spread out over a much wider range at the low end of the NDVI spectrum than the summer values that build a very high peak at the top of range.  For the task at hand, we are going to ignore the high end of the specturm almost entirely, because it is the rollover from winter to spring that I need to find to answer my question up above.
+
+
+```{r small_multiples, echo=F}
+# Work with Data at Annual Scale... Inflection Point analysis  --- First Visualize
+
+# remove 2020 because it is incomplete
+ndviDF = ndviDF[ndviDF$year<2020]
+
+# Make a Facet Figure (Small Multiples) showing median NDVI for each year and Loess Smoothing
+ggplot(data = ndviDF, aes(x=pixelJdateMode, y=ndviMedian)) +
+  geom_point(aes(y=ndviMedian), color="black", size=1) +
+  #geom_hline(yintercept = 0.235, color = "blue", size=0.5) +          # draw a horizonal line on the plot
+  #geom_hline(yintercept = 0.6, color = "green", size=0.5) +
+  facet_wrap(~year) +
+  xlab("Julian Date") +
+  ylab("Median NDVI") +
+  ggtitle("NDVI Data By Year") +
+  theme_light()
+
+
+
+
+
+
+```
+
+
+Looking at all of the years of data...
+
+
+
+```{r loess_smoothing, echo=F}
+
+# Great Resource for Smoothing methods... https://rafalab.github.io/dsbook/smoothing.html
+
+# How to set the SPAN parameter of loess smoothing (this controls the proportion of the number of data points that contribute to the fit at a given point)
+# consider the data... 1 point in a 8 day period
+# consider the process... what is the time scale of major changes in NDVI -- seasonal?  3 months per season in 12 months per year...
+
+seasonSpan = 3/12  # n months of thing of interest / total months in data set
+
+# subset the input data to keep only rows from a single year and filter out NAs in ndvi
+ndviYear <- ndviDF %>%
+  filter(year == 2018)
+
+# use Loess() to smooth data -- Here using a 50% Span factor
+#loess50 = loess(ndviMedian ~ pixelJdateMode, data = ndviYear, span = .5)
+#ndviYear$loess50 = predict(loess50)
+
+
+# plot up the single year of data using the Julian Date of pixel data acquisition 
+ggplot(data = ndviYear, aes(x=pixelJdateMode, y=ndviMedian)) +
+  geom_point(color = "black", size = 2) +
+  geom_smooth(method="loess", span=1, method.args = list(degree=1), mapping=aes(color="dark gray"), se=F) +   # loess smoothing Linear
+  geom_smooth(method="loess", span=seasonSpan+seasonSpan, method.args = list(degree=1), mapping=aes(color="light blue"), se=F) +   # loess smoothing Linear fitting
+  geom_smooth(method="loess", span=.125, method.args = list(degree=1), mapping=aes(color="pink"), se=F) +   # loess smoothing Linear
+  geom_smooth(method="loess", span=seasonSpan, method.args = list(degree=1), mapping=aes(color="red"), se=F) +   # loess smoothing Linear fitting
+  xlab("Julian Date") +
+  ylab("NDVI") +
+  ggtitle("NDVI for 2018 with Loess Smoothing") +
+  scale_color_manual(                #  Manually Build a Legend for the colors in the aes() above
+    name= "Span Setting", 
+    values= c("red"="red","pink"="pink","light blue"="light blue","dark gray"="dark gray"),
+    labels= c("12 months","6 months","1.5 months", "3 months")) +
+  theme_light()
+
+
+
+```
+
+```{r}
+# Work with Data at Annual Scale... FIND Greatest Green UP acceleration
+# First figure it out for a single year...  Later put it in a loop for all years
+
+Year = 2002
+
+# subset the input data to keep only rows from a single year and filter out NAs in ndvi
+ndviYear <- ndviDF %>%
+  filter(year == Year & is.na(ndviMedian) == FALSE)
+
+# use Loess() to smooth data -- Here using a 25% Span factor based on the length of seasons -- see above
+loessSeason = loess(ndviMedian ~ pixelJdateMode, data = ndviYear, span = seasonSpan, degree = 1) # use a linear fit instead of a polynomial fit
+ndviYear$loess = predict(loessSeason)
+
+# Find slope of loess smoothed fit to time series
+ndviYear$slope = 0
+for (i in 2:nrow(ndviYear)) {
+  ndviYear[i,"slope"] = (ndviYear[i,"loess"] - ndviYear[i-1,"loess"])/(ndviYear[i,"pixelJdateMode"] - ndviYear[i-1,"pixelJdateMode"])
+}
+
+# find the highest positive slope value (i.e. greening up in spring) and store the Julian Date
+maxSlope = max(ndviYear$slope)
+maxSlopeJdate = ndviYear[ndviYear$slope == maxSlope,]$pixelJdateMode  
+
+# Calc rate of change of slope (acceleration of greening) of loess smoothed fit
+ndviYear$acceleration = 0
+for (i in 3:nrow(ndviYear)) {
+  ndviYear[i,"acceleration"] = (ndviYear[i,"slope"] - ndviYear[i-1,"slope"])/(ndviYear[i,"pixelJdateMode"] - ndviYear[i-1,"pixelJdateMode"])
+}
+
+# Find the highest acceleration prior to the highest slope
+
+# Use slope and acceleration of greening to estimate the start of "Green Up"
+# Here the "Start of Green Up" is defined as the highest acceleration prior to the steepest slope AND slope is positive, i.e. it is greening up
+AccelerationDF <- ndviYear %>%
+  filter(pixelJdateMode < maxSlopeJdate & slope > 0)
+
+maxSpringAcceleration = max(AccelerationDF$acceleration)
+maxSpringAccJdate = ndviYear[ndviYear$acceleration == maxSpringAcceleration,]$pixelJdateMode  
+
+
+# plot up the single year of data using the Julian Date of pixel data acquisition 
+p1 = ggplot(data = ndviYear) +
+  geom_point(mapping = aes(x=pixelJdateMode, y=ndviMedian),color = "black",, shape = 21, size = 1.5) +
+  geom_smooth(mapping = aes(x=pixelJdateMode, y=ndviMedian), method="loess", span=seasonSpan, method.args = list(degree=1), color="red", se=TRUE) +
+  geom_vline(xintercept = maxSpringAccJdate, color = "red") +
+  geom_vline(xintercept = maxSlopeJdate, color = "blue") +
+  xlab("") +
+  ylab("Smoothed NDVI") +
+  theme_light() 
+
+p2 = ggplot(data = ndviYear) +
+ 
+  geom_col(mapping = aes(x=pixelJdateMode, y=slope*100), color = "dark blue", size = 3, alpha = 0.6) +
+  geom_vline(xintercept = maxSpringAccJdate, color = "red") +
+  geom_vline(xintercept = maxSlopeJdate, color = "blue") +
+  xlab("") +
+  ylab("Slope") +
+  theme_light()
+
+p3 = ggplot(data = ndviYear) +
+  geom_col(mapping = aes(x=pixelJdateMode, y=acceleration*1000), color = "dark red", size = 1.5, alpha = 0.8) +
+  geom_vline(xintercept = maxSpringAccJdate, color = "red") +
+  geom_vline(xintercept = maxSlopeJdate, color = "blue") +
+  xlab("Julian Date") +
+  ylab("Acceleration") +
+  theme_light()
+
+grid.arrange(p1,p2,p3, ncol = 1)
+
+```
+## Find the green up date for both methods for the whole time series
+
+```{r}
+
+# Set up loop that calculates the date of the steepest slope and greatest acceleration for each year in the record
+
+seasonSpan = 3/12  # n months of thing of interest / total months in data set
+greenUpDF = setNames(data.frame(matrix(ncol = 7, nrow = 20)), c("year", "greenUpJdateSlope", "greenUpJdateAcc", "ndviMedianSlope", "ndviMedianAcc", "maxSlope", "maxAcceleration"))
+
+for (i in 2000:2019) {
+  currentYear = i
+  currentIDX = i-1999
+  
+  # subset the input data to keep only rows from a single year and filter out NAs in ndvi
+  ndviYear <- ndviDF %>%
+    filter(year == currentYear & is.na(ndviMedian) == FALSE)
+  
+# use Loess() to smooth data -- Here using a 25% Span factor based on the length of seasons -- see above
+loessSeason = loess(ndviMedian ~ pixelJdateMode, data = ndviYear, span = seasonSpan, degree = 1) # use a linear fit instead of a polynomial fit
+ndviYear$loess = predict(loessSeason)
+
+# Find slope of loess smoothed fit to time series
+ndviYear$slope = 0
+for (i in 2:nrow(ndviYear)) {
+  ndviYear[i,"slope"] = (ndviYear[i,"loess"] - ndviYear[i-1,"loess"])/(ndviYear[i,"pixelJdateMode"] - ndviYear[i-1,"pixelJdateMode"])
+}
+
+# find the highest positive slope value (i.e. greening up in spring) and store the Julian Date
+maxSlope = max(ndviYear$slope)
+maxSlopeJdate = ndviYear[ndviYear$slope == maxSlope,]$pixelJdateMode  
+
+# Calc rate of change of slope (acceleration of greening) of loess smoothed fit
+ndviYear$acceleration = 0
+for (i in 3:nrow(ndviYear)) {
+  ndviYear[i,"acceleration"] = (ndviYear[i,"slope"] - ndviYear[i-1,"slope"])/(ndviYear[i,"pixelJdateMode"] - ndviYear[i-1,"pixelJdateMode"])
+}
+
+# Find the highest acceleration prior to the highest slope
+
+# Use slope and acceleration of greening to estimate the start of "Green Up"
+# Here the "Start of Green Up" is defined as the highest acceleration prior to the steepest slope AND slope is positive, i.e. it is greening up
+AccelerationDF <- ndviYear %>%
+  filter(pixelJdateMode < maxSlopeJdate & slope > 0)
+
+maxSpringAcceleration = max(AccelerationDF$acceleration)
+maxSpringAccJdate = ndviYear[ndviYear$acceleration == maxSpringAcceleration,]$pixelJdateMode  
+  
+ 
+  greenUpDF[currentIDX,"year"] = currentYear
+  greenUpDF[currentIDX,"greenUpJdateSlope"] = maxSlopeJdate
+  greenUpDF[currentIDX,"greenUpJdateAcc"] = maxSpringAccJdate
+  greenUpDF[currentIDX,"ndviMedianSlope"] = ndviYear[ndviYear$slope == maxSlope,]$ndviMedian
+  greenUpDF[currentIDX,"ndviMedianAcc"] = ndviYear[ndviYear$acceleration == maxSpringAcceleration,]$ndviMedian
+  greenUpDF[currentIDX,"maxSlope"] = maxSlope
+  greenUpDF[currentIDX,"maxAcceleration"] = maxSpringAcceleration
+}
+  
+ggplot(greenUpDF) +
+  geom_point(mapping = aes(x=year, y=greenUpJdateSlope), shape= 21, size=3, fill = "blue") +
+  geom_point(mapping = aes(x=year, y=greenUpJdateAcc), shape=21, size=3,  fill = "red") +
+  geom_smooth(mapping = aes(x=year, y=greenUpJdateSlope), method="lm", color="blue") +
+  geom_smooth(mapping = aes(x=year, y=greenUpJdateAcc), method="lm", color="red") +
+  xlab("Year") +
+  ylab("Green Up Date (Julian)") +
+  ggtitle("The Start of Spring Through the Years")
+  
+
+
+
+
+```
+
